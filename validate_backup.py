@@ -9,6 +9,10 @@ class ValidationResult:
     status: str
     message: str
 
+# ↓ VALIDATION FUNCTIONS ↓
+
+# Checks if the file exists, if the path is a file, if the file is empty, or 
+# if the correct extension is used.
 def validate_file(path: Path) -> list[ValidationResult]:
     results = []
 
@@ -48,9 +52,9 @@ def validate_file(path: Path) -> list[ValidationResult]:
         ))
     else:
         results.append(ValidationResult(
-        check="file_not_empty",
-        status="PASS",
-        message=f"File is not empty ({path.stat().st_size} bytes)",
+            check="file_not_empty",
+            status="PASS",
+            message=f"File is not empty ({path.stat().st_size} bytes)",
     ))
 
     if not path.name.endswith(".sql.gz"):
@@ -68,6 +72,7 @@ def validate_file(path: Path) -> list[ValidationResult]:
 
     return results
 
+# Checks if the gzip file is not compressed, incomplete/interrupted, or corrupted.
 def validate_gzip(path: Path) -> ValidationResult:
     try:
         with gzip.open(path, "rb") as file:
@@ -83,8 +88,37 @@ def validate_gzip(path: Path) -> ValidationResult:
         return ValidationResult(
             check="gzip_integrity",
             status="FAIL",
-            message=f"GZIP archive is invalid: \"{error}\""
+            message=f'GZIP archive is invalid: {error}'
         )
+
+
+# Checks if the GZIP file contains a PostgreSQL SQL dump by looking for its dump marker
+def validate_sql_dump(path: Path) -> ValidationResult:
+    try: 
+        with gzip.open(path, "rt", encoding="utf-8", errors="replace") as file:
+
+            content = file.read(100_000)
+            if "-- PostgreSQL database dump" in content:
+                return ValidationResult(
+                    check="file_is_sql_dump",
+                    status="PASS",
+                    message="File is an sql dump"
+                )
+            return ValidationResult(
+                check="file_is_sql_dump",
+                status="FAIL",
+                message="SQL dump marker not found"
+            )
+
+        
+    except OSError as error:
+        return ValidationResult(
+            check="file_is_sql_dump",
+            status="FAIL",
+            message=f"Unable to inspect SQL dump content: {error}"
+        )
+
+# ↓ VALIDATION RESULTS ↓
 
 def get_overall_status(results: list[ValidationResult]) -> str:
     statuses = [result.status for result in results]
@@ -103,10 +137,10 @@ def print_report(path: Path, results: list[ValidationResult]) -> None:
     print(f"Backup Checked: {path}")
     print()
 
-    print(f"{'CHECK':<22} {'STATUS':<8}")
+    print(f"{'CHECK':<22} {'STATUS':<9}")
     print("----------------------------------------------------------------------|")
     for result in results:
-        print(f"{result.check:<22} {result.status:<8} {result.message}")
+        print(f"{result.check:<22} {result.status:<9} {result.message}")
             
     print()
     print(f"Overall Status: {get_overall_status(results)}")
@@ -118,8 +152,20 @@ def main() -> None:
         sys.exit(1)
 
     backup_path = Path(sys.argv[1])
-    results = validate_file(backup_path)
-    results.append(validate_gzip(backup_path))
+    results: list[ValidationResult] = []
+
+    validate_file_result = validate_file(backup_path)
+    results.extend(validate_file_result)
+
+    if get_overall_status(validate_file_result) != "FAIL":
+
+        validate_gzip_result = validate_gzip(backup_path)
+        results.append(validate_gzip_result)
+
+        if validate_gzip_result.status != "FAIL":
+            validate_sql_dump_result = validate_sql_dump(backup_path)
+            results.append(validate_sql_dump_result)
+
     print_report(backup_path, results)
 
     if get_overall_status(results) == "FAIL":
