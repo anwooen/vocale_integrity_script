@@ -118,6 +118,61 @@ def validate_sql_dump(path: Path) -> ValidationResult:
             message=f"Unable to inspect SQL dump content: {error}"
         )
 
+def validate_expected_tables(path: Path) -> ValidationResult:
+
+    expected_tables = {
+        "users",
+        "posts",
+        "topics",
+        "categories",
+        "groups",
+        "user_profiles",
+        "topic_users",
+        "post_actions",
+        "site_settings",
+        "uploads",
+    }
+    found_tables = set()
+
+    try:
+        with gzip.open(path, "rt", encoding="utf-8", errors="replace") as file:
+            for line in file:
+                for table in expected_tables:
+                    if f"CREATE TABLE public.{table}" in line:
+                        found_tables.add(table)
+                        #print(f"{table} FOUND")
+                if expected_tables == found_tables:
+                    break
+
+    except (gzip.BadGzipFile, EOFError, OSError) as error:
+        return ValidationResult(
+            check="expected_tables_found",
+            status="FAIL",
+            message=f"Could not inspect expected tables: {error}",
+        )          
+
+    missing_tables = expected_tables.difference(found_tables)
+
+    if len(missing_tables) == 0:
+        return ValidationResult(
+            check="expected_tables_found",
+            status="PASS",
+            message="All expected tables are found",
+        )
+    elif len(missing_tables) == len(expected_tables):
+        return ValidationResult(
+            check="expected_tables_found",
+            status="FAIL",
+            message=f"All {len(missing_tables)} expected tables not found: {missing_tables}",
+        )
+    else:
+        return ValidationResult(
+            check="expected_tables_found",
+            status="WARNING",
+            message=f"{len(missing_tables)} expected tables not found: {missing_tables}"
+        )
+    
+
 # ↓ VALIDATION RESULTS ↓
 
 def get_overall_status(results: list[ValidationResult]) -> str:
@@ -138,7 +193,7 @@ def print_report(path: Path, results: list[ValidationResult]) -> None:
     print()
 
     print(f"{'CHECK':<22} {'STATUS':<9}")
-    print("----------------------------------------------------------------------|")
+    print("--------------------------------------------------------------------------------------|")
     for result in results:
         print(f"{result.check:<22} {result.status:<9} {result.message}")
             
@@ -165,6 +220,10 @@ def main() -> None:
         if validate_gzip_result.status != "FAIL":
             validate_sql_dump_result = validate_sql_dump(backup_path)
             results.append(validate_sql_dump_result)
+
+            if validate_sql_dump_result.status != "FAIL":
+                validate_expected_tables_result = validate_expected_tables(backup_path)
+                results.append(validate_expected_tables_result)
 
     print_report(backup_path, results)
 
